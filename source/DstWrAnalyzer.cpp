@@ -24,51 +24,101 @@ void DstWrAnalyzer::SetupResults()
 
 void DstWrAnalyzer::WorkerThread()
 {
-	mSampleRateHz = GetSampleRate();
+	const U32 sampleRateHz = GetSampleRate();
 
-	mSerial = GetAnalyzerChannelData( mSettings->mInputChannel );
+	//const U32 samples_per_bit = mSampleRateHz / mSettings->mBitRate;
+	//const U32 samples_to_first_center_of_first_data_bit = U32( 1.5 * double( mSampleRateHz ) / double( mSettings->mBitRate ) );
+	const U32 bit1_min = (mSettings->mBit1_min * (U64)sampleRateHz) / 1000000;			// bit length, [samples]
+	const U32 bit1_max = (mSettings->mBit1_max * (U64)sampleRateHz) / 1000000;
+	const U32 bit0_min = (mSettings->mBit0_min * (U64)sampleRateHz) / 1000000;
 
-	if( mSerial->GetBitState() == BIT_LOW )
-		mSerial->AdvanceToNextEdge();
+	AnalyzerChannelData * raw = GetAnalyzerChannelData(mSettings->mInputChannel);
 
-	U32 samples_per_bit = mSampleRateHz / mSettings->mBitRate;
-	U32 samples_to_first_center_of_first_data_bit = U32( 1.5 * double( mSampleRateHz ) / double( mSettings->mBitRate ) );
+	//if (raw->GetBitState() == BIT_LOW )
+	//	raw->AdvanceToNextEdge();
+	// 0x0001F9
+	//   000004B0
+
 
 	for( ; ; )
 	{
 		U8 data = 0;
-		U8 mask = 1 << 7;
-		
-		mSerial->AdvanceToNextEdge(); //falling edge -- beginning of the start bit
+		bool error = false;
 
-		U64 starting_sample = mSerial->GetSampleNumber();
+		if (! raw->GetBitState())
+			raw->AdvanceToNextEdge();
+		// high level now
 
-		mSerial->Advance( samples_to_first_center_of_first_data_bit );
+		const U64 starting_sample = raw->GetSampleNumber();
+		mResults->AddMarker(starting_sample, AnalyzerResults::Start, mSettings->mInputChannel);
 
-		for( U32 i=0; i<8; i++ )
+		for (U32 bitNo = 0; bitNo < 8; bitNo++ )
 		{
-			//let's put a dot exactly where we sample this bit:
-			mResults->AddMarker( mSerial->GetSampleNumber(), AnalyzerResults::Dot, mSettings->mInputChannel );
+			const U64 edgeR1 = raw->GetSampleNumber();		// rising edge
+			raw->AdvanceToNextEdge();
+			const U64 edgeF1 = raw->GetSampleNumber();		// falling edge
+			U64 lenH = edgeF1 - edgeR1;
+			// low level now
 
-			if( mSerial->GetBitState() == BIT_HIGH )
-				data |= mask;
+			if (lenH > bit1_max / 2)
+			{
+				raw->AdvanceToNextEdge();
+				// high level now
+				error = true;
+				// next byte cycle
+				break;
+			}
 
-			mSerial->Advance( samples_per_bit );
+			U64 lenL;
+			lenL = raw->GetSampleOfNextEdge() - edgeF1;
+			if (lenL > lenH)
+				lenL = lenH;
 
-			mask = mask >> 1;
+			raw->Advance((U32)lenL - 1);
+			// low level still going
+
+			// skip spikes
+			//const U64 lenH2 = raw->GetSampleOfNextEdge() - raw->GetSampleNumber();
+			//if (lenH2 >= bit0_min / 10)
+			//	break;
+
+			if (bitNo < 7)	// not last bit
+				raw->AdvanceToNextEdge();
+			// high level now
+
+			if ((lenL + lenH < bit0_min) ||
+				(lenL + lenH > bit1_max) ||
+				(lenL > bit1_min/2 && lenH < bit1_min/2) ||
+				(lenL < bit1_min/2 && lenH > bit1_min/2) )
+			{
+				error = true;
+				break;
+			}
+
+			const bool dataBit = lenH + lenL > bit1_min;
+			const int offset = (mSettings->mMsbFirst) ? (7 - bitNo) : bitNo;
+			if (dataBit)
+				data |= 1ULL << offset;
+
+			mResults->AddMarker((edgeR1 + edgeF1)/2, 
+				dataBit ? AnalyzerResults::One : AnalyzerResults::Zero, 
+				mSettings->mInputChannel);
+
+		}	// for (bitNo < 8)
+
+		if (!error)
+		{
+			//we have a data to save. 
+			Frame frame;
+			frame.mData1 = data;
+			frame.mFlags = 0;
+			frame.mStartingSampleInclusive = starting_sample;
+			frame.mEndingSampleInclusive = raw->GetSampleNumber();
+
+			mResults->AddFrame(frame);
+			mResults->CommitResults();
+			ReportProgress(frame.mEndingSampleInclusive);
 		}
-
-
-		//we have a byte to save. 
-		Frame frame;
-		frame.mData1 = data;
-		frame.mFlags = 0;
-		frame.mStartingSampleInclusive = starting_sample;
-		frame.mEndingSampleInclusive = mSerial->GetSampleNumber();
-
-		mResults->AddFrame( frame );
-		mResults->CommitResults();
-		ReportProgress( frame.mEndingSampleInclusive );
 	}
 }
 
@@ -90,7 +140,7 @@ U32 DstWrAnalyzer::GenerateSimulationData( U64 minimum_sample_index, U32 device_
 
 U32 DstWrAnalyzer::GetMinimumSampleRateHz()
 {
-	return mSettings->mBitRate * 4;
+	return 4 * 1000000 / mSettings->mBit0_min;
 }
 
 const char* DstWrAnalyzer::GetAnalyzerName() const

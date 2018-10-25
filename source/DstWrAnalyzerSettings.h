@@ -17,11 +17,15 @@ public:
 
 	
 	Channel mInputChannel;
-	U32 mBitRate;
+	U32 mBit1_min, mBit1_max, mBit0_min;	// bit length, [uS]
+	bool mMsbFirst;
 
 protected:
 	std::auto_ptr< AnalyzerSettingInterfaceChannel >	mInputChannelInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBitRateInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBit1_maxLenInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBit1_minLenInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBit0_minLenInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceNumberList > mBitOrderInterface;
 };
 
 #endif //DSTWR_ANALYZER_SETTINGS
