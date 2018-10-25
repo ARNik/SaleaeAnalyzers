@@ -1,16 +1,16 @@
-#ifndef SIMPLESERIAL_ANALYZER_RESULTS
-#define SIMPLESERIAL_ANALYZER_RESULTS
+#ifndef IMOIMI_ANALYZER_RESULTS
+#define IMOIMI_ANALYZER_RESULTS
 
 #include <AnalyzerResults.h>
 
-class SimpleSerialAnalyzer;
-class SimpleSerialAnalyzerSettings;
+class IMOIMIAnalyzer;
+class IMOIMIAnalyzerSettings;
 
-class SimpleSerialAnalyzerResults : public AnalyzerResults
+class IMOIMIAnalyzerResults : public AnalyzerResults
 {
 public:
-	SimpleSerialAnalyzerResults( SimpleSerialAnalyzer* analyzer, SimpleSerialAnalyzerSettings* settings );
-	virtual ~SimpleSerialAnalyzerResults();
+	IMOIMIAnalyzerResults( IMOIMIAnalyzer* analyzer, IMOIMIAnalyzerSettings* settings );
+	virtual ~IMOIMIAnalyzerResults();
 
 	virtual void GenerateBubbleText( U64 frame_index, Channel& channel, DisplayBase display_base );
 	virtual void GenerateExportFile( const char* file, DisplayBase display_base, U32 export_type_user_id );
@@ -22,8 +22,8 @@ public:
 protected: //functions
 
 protected:  //vars
-	SimpleSerialAnalyzerSettings* mSettings;
-	SimpleSerialAnalyzer* mAnalyzer;
+	IMOIMIAnalyzerSettings* mSettings;
+	IMOIMIAnalyzer* mAnalyzer;
 };
 
-#endif //SIMPLESERIAL_ANALYZER_RESULTS
+#endif //IMOIMI_ANALYZER_RESULTS
