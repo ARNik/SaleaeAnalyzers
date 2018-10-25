@@ -24,51 +24,152 @@ void IMOIMIAnalyzer::SetupResults()
 
 void IMOIMIAnalyzer::WorkerThread()
 {
-	mSampleRateHz = GetSampleRate();
+	using Marker = AnalyzerResults::MarkerType;
 
-	mSerial = GetAnalyzerChannelData( mSettings->mInputChannel );
+	const U64 sampleRateHz = GetSampleRate();
+	const bool version2 = mSettings->mVersion2;
+	const U64 bit_length_usec = version2 ? 5125 : 20500;
+	const U32 bitLen = (U32)(sampleRateHz * bit_length_usec / 1000000);		// samples per bit
+	Channel channel = mSettings->mInputChannel;
+	AnalyzerChannelData* raw = GetAnalyzerChannelData(channel);
 
-	if( mSerial->GetBitState() == BIT_LOW )
-		mSerial->AdvanceToNextEdge();
+	auto addMarker = [&](Marker marker, U32 offset)
+	{	mResults->AddMarker(raw->GetSampleNumber() + offset, marker, channel);	};
 
-	U32 samples_per_bit = mSampleRateHz / mSettings->mBitRate;
-	U32 samples_to_first_center_of_first_data_bit = U32( 1.5 * double( mSampleRateHz ) / double( mSettings->mBitRate ) );
+	auto nextBitValue = [&]() -> bool
+	{
+		const bool cur = (raw->GetBitState() == BIT_HIGH);
+		if (raw->WouldAdvancingCauseTransition(bitLen / 2))
+			return !cur;
+		else
+			return cur;
+	};
+
 
 	for( ; ; )
 	{
-		U8 data = 0;
-		U8 mask = 1 << 7;
-		
-		mSerial->AdvanceToNextEdge(); //falling edge -- beginning of the start bit
+		if (raw->GetBitState())
+			raw->AdvanceToNextEdge();
+		// low level at this point
 
-		U64 starting_sample = mSerial->GetSampleNumber();
+		// search start pattern 
+		// 24 (32) zero bits at version 2
+		// 8 zero bits at version 1
+		const U64 start_pulse_min = version2 ? 24 : 8;
+		const U64 start_pulse_max = version2 ? 32 : 8;
 
-		mSerial->Advance( samples_to_first_center_of_first_data_bit );
-
-		for( U32 i=0; i<8; i++ )
+		const U64 starting_sample = raw->GetSampleNumber();
+		const U64 startPulseLen = raw->GetSampleOfNextEdge() - starting_sample;
+		if (startPulseLen < (bitLen * (start_pulse_min - 1)) ||
+			startPulseLen > (bitLen * (start_pulse_max + 1)) )
 		{
-			//let's put a dot exactly where we sample this bit:
-			mResults->AddMarker( mSerial->GetSampleNumber(), AnalyzerResults::Dot, mSettings->mInputChannel );
+			// skip pulse
+			raw->AdvanceToNextEdge();
+			raw->AdvanceToNextEdge();
+			continue;
+		}
+	
+		// start marker
+		addMarker(AnalyzerResults::Start, 0);
+		// sync marker
+		addMarker(AnalyzerResults::Dot, (U32)(startPulseLen / 2));
 
-			if( mSerial->GetBitState() == BIT_HIGH )
-				data |= mask;
+		raw->AdvanceToNextEdge();
+		// high level at this point
+		
+		// 11 (3) one bits at version2
+		if (version2)
+		{
+			// total length should be 36 bits
+			const U64 nextEdge = raw->GetSampleOfNextEdge();
+			const U64 startPulseFull = nextEdge - starting_sample;
+			const bool valid = 
+				(startPulseFull > bitLen * (36 - 1)) &&
+				(startPulseFull < bitLen * (36 + 1));
+			
+			// move cursor to sync pattern
+			const U64 syncStart = nextEdge - bitLen;
 
-			mSerial->Advance( samples_per_bit );
+			Marker marker = valid ? AnalyzerResults::Dot : AnalyzerResults::ErrorDot;
+			addMarker(marker, (U32)(syncStart - raw->GetSampleNumber()) / 2);
 
-			mask = mask >> 1;
+			raw->AdvanceToAbsPosition(syncStart);
+		}
+		// collect data
+		U32 value = 0;
+
+		// sync pattern
+		auto sync = [&]() -> bool
+		{
+			bool err = false;
+			if (!nextBitValue())
+				err = true;
+			
+			// check if sync pattern starting AFTER cursor
+			if (!raw->GetBitState())
+			{
+				U64 prevBitLength = raw->GetSampleOfNextEdge() - raw->GetSampleNumber();
+				if (prevBitLength < (bitLen / 4))
+					raw->Advance((U32)prevBitLength);
+			}
+
+			// should be only one bit
+			U64 syncOneLen = raw->GetSampleOfNextEdge() - raw->GetSampleNumber();
+			if (syncOneLen < (bitLen * 3 / 4) ||
+				syncOneLen > (bitLen * 5 / 4))
+				err = true;
+
+			Marker marker = !err ? AnalyzerResults::Square : AnalyzerResults::ErrorSquare;
+
+			addMarker(marker, bitLen / 2);
+			raw->Advance(bitLen / 2);
+			raw->AdvanceToNextEdge();
+			addMarker(marker, bitLen / 2);
+			raw->Advance(bitLen);
+			return err;
+			// low level at this point
+		};
+
+		// collect data
+		auto data = [&]()
+		{
+			for (U32 i = 0; i < 4; i++)
+			{
+				bool bit = nextBitValue();
+				value <<= 1;
+				if (bit)
+					value |= 1;
+				Marker marker = bit ? AnalyzerResults::One : AnalyzerResults::Zero;
+				addMarker(marker, bitLen / 2);
+				raw->Advance(bitLen);
+			}
+		};
+
+		// data length - 32 bits at version2, 16 bits at version1
+		const U32 group_cnt = version2 ? 8 : 4;
+
+		bool syncError = false;
+		for (U32 i = 0; i < group_cnt; i++)
+		{
+			if (syncError = sync())
+				break;
+			data();
 		}
 
+		// end marker
+		const U64 ending_sample = raw->GetSampleNumber();
+		addMarker(AnalyzerResults::Stop, 0);
 
-		//we have a byte to save. 
+		//we have a halfbyte to save. 
 		Frame frame;
-		frame.mData1 = data;
-		frame.mFlags = 0;
+		frame.mData1 = value;
+		frame.mFlags = syncError ? DISPLAY_AS_ERROR_FLAG : 0;
 		frame.mStartingSampleInclusive = starting_sample;
-		frame.mEndingSampleInclusive = mSerial->GetSampleNumber();
+		frame.mEndingSampleInclusive = ending_sample;
 
-		mResults->AddFrame( frame );
+		mResults->AddFrame(frame);
 		mResults->CommitResults();
-		ReportProgress( frame.mEndingSampleInclusive );
+		ReportProgress(ending_sample);
 	}
 }
 
@@ -90,12 +191,13 @@ U32 IMOIMIAnalyzer::GenerateSimulationData( U64 minimum_sample_index, U32 device
 
 U32 IMOIMIAnalyzer::GetMinimumSampleRateHz()
 {
-	return mSettings->mBitRate * 4;
+	// minimum bit time - 5 msec
+	return 200 * 5;
 }
 
 const char* IMOIMIAnalyzer::GetAnalyzerName() const
 {
-	return "Toyota IMO/IMI analyzer";
+	return ::GetAnalyzerName();
 }
 
 const char* GetAnalyzerName()

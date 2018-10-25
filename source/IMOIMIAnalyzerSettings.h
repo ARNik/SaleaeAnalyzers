@@ -17,11 +17,13 @@ public:
 
 	
 	Channel mInputChannel;
-	U32 mBitRate;
+	bool mVersion2;
+	bool mRevBits;
 
 protected:
 	std::auto_ptr< AnalyzerSettingInterfaceChannel >	mInputChannelInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBitRateInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mVersionInterface;
+	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mBitsOrderInterface;
 };
 
 #endif //IMOIMI_ANALYZER_SETTINGS

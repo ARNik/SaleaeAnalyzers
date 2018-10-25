@@ -24,6 +24,7 @@ protected: //functions
 protected:  //vars
 	IMOIMIAnalyzerSettings* mSettings;
 	IMOIMIAnalyzer* mAnalyzer;
+	static U64 reverseBits(U64 val);
 };
 
 #endif //IMOIMI_ANALYZER_RESULTS

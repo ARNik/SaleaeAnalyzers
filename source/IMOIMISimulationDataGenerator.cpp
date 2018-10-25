@@ -38,9 +38,9 @@ U32 IMOIMISimulationDataGenerator::GenerateSimulationData( U64 largest_sample_re
 
 void IMOIMISimulationDataGenerator::CreateSerialByte()
 {
-	U32 samples_per_bit = mSimulationSampleRateHz / mSettings->mBitRate;
+	const U32 samples_per_bit = mSimulationSampleRateHz / 9600;
 
-	U8 byte = mSerialText[ mStringIndex ];
+	const U8 byte = mSerialText[ mStringIndex ];
 	mStringIndex++;
 	if( mStringIndex == mSerialText.size() )
 		mStringIndex = 0;
